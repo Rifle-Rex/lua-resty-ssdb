@@ -1,3 +1,4 @@
+-- Copyright (C) 2021 RexGao (Rifle-Rex)
 -- Copyright (C) 2013 LazyZhu (lazyzhu.com)
 -- Copyright (C) 2013 IdeaWu (ideawu.com)
 -- Copyright (C) 2012 Yichun Zhang (agentzh)
@@ -18,9 +19,7 @@ local gmatch = string.gmatch
 local remove = table.remove
 
 
-module(...)
-
-_VERSION = '0.02'
+local _VERSION = '0.03'
 
 local commands = {
     "set",                  "get",                 "del",
@@ -43,20 +42,25 @@ local commands = {
 
 }
 
-
+local _M = {}
 local mt = { __index = _M }
 
 
-function new(self)
+function _M:new()
     local sock, err = tcp()
     if not sock then
         return nil, err
     end
-    return setmetatable({ sock = sock }, mt)
+    local ins = { 
+        sock = sock ,
+        ['_reqs'] = nil
+    }
+    setmetatable(ins, mt)
+    return ins
 end
 
 
-function set_timeout(self, timeout)
+function _M:set_timeout(timeout)
     local sock = self.sock
     if not sock then
         return nil, "not initialized"
@@ -66,7 +70,7 @@ function set_timeout(self, timeout)
 end
 
 
-function connect(self, ...)
+function _M:connect(...)
     local sock = self.sock
     if not sock then
         return nil, "not initialized"
@@ -76,7 +80,7 @@ function connect(self, ...)
 end
 
 
-function set_keepalive(self, ...)
+function _M:set_keepalive(...)
     local sock = self.sock
     if not sock then
         return nil, "not initialized"
@@ -86,7 +90,7 @@ function set_keepalive(self, ...)
 end
 
 
-function get_reused_times(self)
+function _M:get_reused_times()
     local sock = self.sock
     if not sock then
         return nil, "not initialized"
@@ -96,7 +100,7 @@ function get_reused_times(self)
 end
 
 
-function close(self)
+function _M:close()
     local sock = self.sock
     if not sock then
         return nil, "not initialized"
@@ -106,24 +110,23 @@ function close(self)
 end
 
 
-local function _read_reply(sock)
+function _M:_read_reply()
 	local val = {}
 
 	while true do
 		-- read block size
-		local line, err, partial = sock:receive()
+		local line, err, partial = self.sock:receive()
 		if not line or len(line)==0 then
 			-- packet end
 			break
 		end
 		local d_len = tonumber(line)
-
+        
 		-- read block data
-		local data, err, partial = sock:receive(d_len)
+		local data, err, partial = self.sock:receive(d_len)
 		insert(val, data);
-
 		-- ignore the trailing lf/crlf after block data
-		local line, err, partial = sock:receive()
+		local line, err, partial = self.sock:receive()
 	end
 
 	local v_num = tonumber(#val)
@@ -149,7 +152,7 @@ local function _gen_req(args)
             insert(req, arg)
             insert(req, "\n")
         else
-            return nil, err
+            return nil, 'err'
         end
     end
     insert(req, "\n")
@@ -161,7 +164,7 @@ local function _gen_req(args)
 end
 
 
-local function _do_cmd(self, ...)
+function _M:_do_cmd(...)
     local args = {...}
 
     local sock = self.sock
@@ -178,11 +181,12 @@ local function _do_cmd(self, ...)
     end
 
     local bytes, err = sock:send(req)
+    
     if not bytes then
         return nil, err
     end
 
-    return _read_reply(sock)
+    return self:_read_reply()
 end
 
 
@@ -191,12 +195,12 @@ for i = 1, #commands do
 
     _M[cmd] =
         function (self, ...)
-            return _do_cmd(self, cmd, ...)
+            return self:_do_cmd(cmd, ...)
         end
 end
 
 
-function multi_hset(self, hashname, ...)
+function _M:multi_hset(hashname, ...)
     local args = {...}
     if #args == 1 then
         local t = args[1]
@@ -214,7 +218,7 @@ function multi_hset(self, hashname, ...)
 end
 
 
-function multi_zset(self, keyname, ...)
+function _M:multi_zset(keyname, ...)
     local args = {...}
     if #args == 1 then
         local t = args[1]
@@ -232,37 +236,37 @@ function multi_zset(self, keyname, ...)
 end
 
 
-function init_pipeline(self)
+function _M:init_pipeline()
     self._reqs = {}
 end
 
 
-function cancel_pipeline(self)
+function _M:cancel_pipeline()
     self._reqs = nil
 end
 
 
-function commit_pipeline(self)
+function _M:commit_pipeline()
     local reqs = self._reqs
     if not reqs then
         return nil, "no pipeline"
     end
-
+    
     self._reqs = nil
 
     local sock = self.sock
     if not sock then
         return nil, "not initialized"
     end
-
+    
     local bytes, err = sock:send(reqs)
     if not bytes then
         return nil, err
     end
-
+    
     local vals = {}
     for i = 1, #reqs do
-        local res, err = _read_reply(sock)
+        local res, err = self:_read_reply()
         if res then
             insert(vals, res)
 
@@ -278,7 +282,7 @@ function commit_pipeline(self)
 end
 
 
-function array_to_hash(self, t)
+function _M.array_to_hash(t)
     local h = {}
     for i = 1, #t, 2 do
         h[t[i]] = t[i + 1]
@@ -295,7 +299,7 @@ local class_mt = {
 }
 
 
-function add_commands(...)
+function _M.add_commands(...)
     local cmds = {...}
     local newindex = class_mt.__newindex
     class_mt.__newindex = nil
@@ -310,5 +314,5 @@ function add_commands(...)
 end
 
 
-setmetatable(_M, class_mt)
+return _M
 
